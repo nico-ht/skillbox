@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { JevProvider } from "../shared";
+import { lexicalRecommendations } from "./lexical-recommendations";
 
 export const recommendationInput = z.object({
   task: z.string().trim().min(1).max(2000),
   limit: z.number().int().min(1).max(50).default(10),
   offset: z.number().int().nonnegative().default(0),
+  explicitSkills: z.array(z.string().min(1).max(80)).max(20).default([]),
 });
 export const RUBRIC_VERSION = "skill-relevance-v1";
 export const MAX_CANDIDATES = 200;
@@ -25,6 +27,7 @@ export type Candidate = {
   referenceId: string;
   revision: string;
   description: string;
+  manualOnly?: boolean;
 };
 export type Catalog = { scope: string; candidates: Candidate[] };
 type SearchPage = {
@@ -333,18 +336,32 @@ export function createRecommender(
     input: z.input<typeof recommendationInput>,
     signal?: AbortSignal,
   ) => {
-    const { task, limit, offset } = recommendationInput.parse(input);
+    const { task, limit, offset, explicitSkills } = recommendationInput.parse(input);
     signal?.throwIfAborted();
     const started = now();
-    const catalog = await deps.catalog();
-    const catalogVersion = hash(catalog);
-    const key = hash([task, catalogVersion, RUBRIC_VERSION, "jev"]);
+    const originalCatalog = await deps.catalog();
+    const eligible = (candidate: Candidate) =>
+      !candidate.manualOnly || explicitSkills.includes(candidate.id);
+    const catalog = { ...originalCatalog, candidates: originalCatalog.candidates.filter(eligible) };
+    const catalogVersion = hash(originalCatalog);
+    const key = hash([task, catalogVersion, [...explicitSkills].sort(), RUBRIC_VERSION, "jev"]);
     const fallback = async (reason: string) => {
       signal?.throwIfAborted();
-      const page = await deps.search(task, limit, offset);
+      let page = await deps.search(task, limit, offset);
+      const fallbackCatalog = await deps.catalog();
+      // Whole-sentence database search can miss every word in a German request.
+      // Use the complete authorized catalog for an explicitly nonsemantic fallback.
+      if (!page.items.length && !page.hasMore && fallbackCatalog.candidates.length <= MAX_CANDIDATES) {
+        const ranked = lexicalRecommendations(task, fallbackCatalog.candidates.filter(eligible));
+        const hasMore = ranked.length > offset + limit;
+        page = {items: ranked.slice(offset, offset + limit), hasMore, nextOffset: hasMore ? offset + limit : null};
+      }
       return {
         ...page,
-        items: page.items.map((s) => ({ ...s, relevance: null })),
+        items: page.items.filter((s) => {
+          const known = fallbackCatalog.candidates.find((candidate) => candidate.id === s.id);
+          return eligible(s) && (!known || eligible(known));
+        }).map((s) => ({ ...s, relevance: null })),
         method: "search" as const,
         noMatch: null,
         cacheHit: false,
@@ -354,8 +371,8 @@ export function createRecommender(
       };
     };
     if (
-      catalog.candidates.length > MAX_CANDIDATES ||
-      JSON.stringify(catalog.candidates).length > MAX_CATALOG_CHARACTERS
+      originalCatalog.candidates.length > MAX_CANDIDATES ||
+      JSON.stringify(originalCatalog.candidates).length > MAX_CATALOG_CHARACTERS
     )
       return fallback("catalog_limit"); // Never silently evaluate an alphabetic/lexical subset.
     for (const [k, v] of cache) if (v.expires <= now()) cache.delete(k);

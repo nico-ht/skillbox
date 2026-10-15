@@ -19,6 +19,19 @@ const candidate = (
   revision: `revision-${id}`,
 });
 const skills = [candidate("alpha"), candidate("beta"), candidate("gamma")];
+test("manual-only candidates require explicit IDs, not incidental task mentions", async () => {
+  const manual = { ...candidate("manual-review"), manualOnly: true };
+  const f = fixture([candidate("automatic"), manual]);
+  const seen: string[][] = [];
+  const recommend = createRecommender(async (_, candidates) => {
+    seen.push(candidates.map((s) => s.id));
+    return { scores: candidates.map(() => 4) };
+  });
+  expect((await recommend(f.deps, { task: "Do not use manual-review" })).items.map((s) => s.id)).toEqual(["automatic"]);
+  expect((await recommend(f.deps, { task: "Review", explicitSkills: ["manual-review"] })).items.map((s) => s.id)).toEqual(["automatic", "manual-review"]);
+  expect((await recommend(f.deps, { task: "Review" })).items.map((s) => s.id)).toEqual(["automatic"]);
+  expect(seen).toEqual([["automatic"], ["automatic", "manual-review"], ["automatic"]]);
+});
 function fixture(candidates = skills) {
   let catalog: Catalog = { scope: "reader-a", candidates };
   let fallbacks = 0;

@@ -74,6 +74,26 @@ to the same endpoint. It returns full protocol error envelopes, including
 modern HTTP 400 negotiation errors; it does not silently translate them into
 internal errors. Human CLI commands continue using the HTTP API.
 
+### Reporting application from the CLI
+
+After actually applying a skill, report the exact revision returned by `load`:
+
+```sh
+skillbox report-use my-skill REVISION applied
+```
+
+Use `applied` when the workflow was used, or `succeeded` / `failed` when its
+outcome is known. Choose one report per application; these values are outcomes,
+not successive status updates. The command posts `{id, revision, outcome,
+context: {harness: "skillbox-cli"}}` to authenticated `POST /api/skill-usage`
+and prints the server result. Missing arguments, invalid outcomes and server
+errors produce a nonzero exit status.
+
+This is the CLI equivalent of MCP `report_skill_use`. Loading instructions,
+reading files or fetching packages records reads, not application. Discovery,
+audits and maintenance must not generate application reports. Reports are
+self-reported evidence; when none exist, actual application is unknown.
+
 ## Canonical identity and content
 
 ```text

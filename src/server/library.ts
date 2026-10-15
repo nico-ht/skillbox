@@ -7,6 +7,9 @@ import { packageMetrics } from "../package-metrics";
 import { parseSkillIcon, type SkillIcon } from "../skill-icons";
 import { createHash, randomUUID } from "node:crypto";
 import matter from "gray-matter";
+import { manualOnly } from "../invocation-policy";
+import { usageInput } from "./usage";
+import type { z } from "zod";
 import { and, eq, desc, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { skills, revisions, events } from "./schema";
@@ -299,6 +302,18 @@ export async function search(
   return { items, hasMore, nextOffset: hasMore ? offset + count : null };
 }
 // Only compact, authorized, active leaf descriptions can leave this server.
+export async function invocationPolicies(p: Principal, ids: string[]) {
+  if (!ids.length) return new Map<string, boolean>();
+  const rows = await db.select({
+    id: skills.id,
+    description: skills.description,
+    frontmatter: sql<Record<string, unknown>>`${revisions.metadata}->'frontmatter'`,
+    policy: sql<string | null>`(SELECT f->>'content' FROM jsonb_array_elements(${revisions.files}) f WHERE f->>'path'='agents/openai.yaml' LIMIT 1)`,
+  }).from(skills).innerJoin(revisions, eq(skills.revision, revisions.id))
+    .where(and(await grantFilter(p), inArray(skills.id, ids), eq(skills.disabled, false), eq(skills.archived, false)));
+  return new Map(rows.map((row) => [row.id, manualOnly(row.description, row.frontmatter, row.policy ? Buffer.from(row.policy, "base64").toString("utf8") : null)]));
+}
+
 export async function recommendationCatalog(p: Principal): Promise<Catalog> {
   const candidates = await db
     .select({
@@ -318,6 +333,7 @@ export async function recommendationCatalog(p: Principal): Promise<Catalog> {
     )
     .orderBy(skills.id)
     .limit(MAX_CANDIDATES + 1);
+  const policies = await invocationPolicies(p, candidates.map((candidate) => candidate.id));
   return {
     scope: JSON.stringify([
       p.id,
@@ -326,7 +342,10 @@ export async function recommendationCatalog(p: Principal): Promise<Catalog> {
       p.allSkills,
       [...p.skillIds].sort(),
     ]),
-    candidates,
+    candidates: candidates.map((candidate) => ({
+      ...candidate,
+      ...(policies.get(candidate.id) ? { manualOnly: true } : {}),
+    })),
   };
 }
 export async function recommendSkills(
@@ -348,14 +367,17 @@ export async function recommendSkills(
         return catalog;
       },
       search: async (task, limit, offset) => {
-        const page = await search(await principal(), task, limit, offset);
+        const currentPrincipal = await principal();
+        const page = await search(currentPrincipal, task, limit, offset);
+        const policies = await invocationPolicies(currentPrincipal, page.items.map((s) => s.id));
         return {
           ...page,
           items: page.items.map((s): Candidate => ({
-            id: s.id,
-            referenceId: s.referenceId!,
-            revision: s.revision,
-            description: s.description,
+              id: s.id,
+              referenceId: s.referenceId!,
+              revision: s.revision,
+              description: s.description,
+              ...(policies.get(s.id) ? {manualOnly: true} : {}),
           })),
         };
       },
@@ -369,6 +391,14 @@ export async function recommendSkills(
     ...(configured ? { provider: configured.provider } : {}),
   };
 }
+export async function reportUse(p: Principal, input: z.input<typeof usageInput>) {
+  const { id: reference, revision, outcome, context } = usageInput.parse(input);
+  const id = await resolveReferenceId(reference);
+  await revisionFor(p, id, revision);
+  await record(p, "reported_use", id, { ...context, revision, outcome });
+  return { recorded: true };
+}
+
 export async function revisionFor(p: Principal, id: string, revision?: string) {
   id = await resolveReferenceId(id);
   if (!(await canRead(p, id)))

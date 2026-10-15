@@ -7,6 +7,8 @@ description: ALWAYS browse the Skills Library at the start of a task to discover
 
 At the beginning of each task, call `search_skills` without a query once. This returns the authorized skill index. If more pages exist, fetch them. Search again when the task changes or an expected workflow is missing.
 
+For substantive tasks, call `recommend_skills` with the user's intended outcome in natural language to assist selection. Keep the already discovered index as a fallback: `method=search`, an empty fallback result or `noMatch=null` does not mean no useful skill exists. Select from the index yourself in that case. Pass `explicitSkills` only for exact skill IDs the user explicitly requested; manual-only skills must not be activated just because the task shares a topic. Reconsider selection when the work moves from diagnosis to implementation or verification.
+
 Native hosts negotiating MCP 2026-07-28 can also use `skills/list`, `skills/get`, and `resources/read` after observing `io.modelcontextprotocol/skills` in `server/discover`. Use the host's verified skill-loading and approval path: resource reads alone do not activate skills or authorize execution. Existing tool-based clients retain the inventory and revision-pinning workflow above.
 
 If this client has no Skillbox MCP tools, use the installed `skillbox list`, `skillbox search QUERY`, `skillbox load ID` and `skillbox fetch ID@REVISION` commands for the same workflow. Read fetched files from the printed directory.
@@ -22,3 +24,5 @@ If the library is unavailable, report it. Do not silently use stale files. Servi
 Writers may update skills through `upsert_skill` or the CLI with the expected revision. Preserve every file unless its removal is intended. Never put credentials or session data in a skill.
 
 Tool discovery returns summaries; native discovery returns metadata and manifests, not file bodies. Do not bulk-load the library. Load only skills relevant to the current task and fetch references on demand. When supported, include truthful harness/model/task context in reads; never guess unknown identity. Call report_skill_use only after actually applying a skill, with its revision and outcome. Reading for discovery, audits or maintenance is not usage.
+
+CLI-only clients can report actual application with `skillbox report-use ID REVISION applied|succeeded|failed`. Missing reports mean application is unknown, not that a skill was unused. Never report imports, audits or simple reads as application.

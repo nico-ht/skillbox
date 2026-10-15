@@ -739,6 +739,42 @@ test("GitHub URL preview is owner-only and publish preserves SHA provenance and 
   }
 });
 
+test("discovery preserves long triggers and recommendations respect package invocation policy", async () => {
+  const id = "test-routing-" + randomUUID().slice(0, 8);
+  ids.push(id);
+  const description = "Useful general workflow. ".repeat(15) + " Only when explicitly requested by name.";
+  const published = await publish(ADMIN, id, [
+    makeFile("SKILL.md", `---\nname: ${id}\ndescription: ${description}\n---\nInstructions`),
+    makeFile("agents/openai.yaml", "policy:\n  allow_implicit_invocation: false\n"),
+  ], null);
+  const catalog = await recommendationCatalog(ADMIN);
+  expect(catalog.candidates.find((s) => s.id === id)?.manualOnly).toBe(true);
+  const res = await app.request("/mcp", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.SKILLBOX_ADMIN_TOKEN}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call", params: {name: "search_skills", arguments: {query: id}}}),
+  });
+  const wire = await res.json();
+  const result = JSON.parse(wire.result.content[0].text);
+  expect(result.items[0]).toMatchObject({ id, description, revision: published.revision, manualOnly: true });
+});
+
+test("usage HTTP validates revisions and access without treating reads as use", async () => {
+  const id = "test-usage-" + randomUUID().slice(0, 8);
+  ids.push(id);
+  const published = await publish(ADMIN, id, files(id), null);
+  const post = (payload: unknown, authorization = `Bearer ${process.env.SKILLBOX_ADMIN_TOKEN}`) => app.request("/api/skill-usage", {
+    method: "POST", headers: { Authorization: authorization, "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  expect((await post({id, revision: published.revision, outcome: "succeeded"}, `Bearer ${allowedToken}`)).status).toBe(404);
+  expect((await post({id, revision: "missing", outcome: "succeeded"})).status).toBe(404);
+  expect((await post({id, revision: published.revision, outcome: "invalid"})).status).toBe(400);
+  expect((await post({id, revision: published.revision, outcome: "succeeded", context: {harness: "fixture"}})).status).toBe(200);
+  const stats = (await search(ADMIN, id, 10, 0, false, false, ["skill"], true)).items[0];
+  expect(stats.usageCount).toBe(1);
+  expect(stats.readCount).toBe(0);
+});
+
 test("recommendations authorize full leaf catalog before scoring and invalidate grants/lifecycle/revisions", async () => {
   const names = Array.from(
     { length: 6 },

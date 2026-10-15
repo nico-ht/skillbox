@@ -202,6 +202,16 @@ async function main() {
     );
     return;
   }
+  if (command === "report-use") {
+    const [id, revision, outcome, ...extra] = process.argv.slice(3);
+    if (!id || !revision || !["applied", "succeeded", "failed"].includes(outcome) || extra.length)
+      throw new Error("Usage: skillbox report-use ID REVISION applied|succeeded|failed");
+    console.log(JSON.stringify(await request("/api/skill-usage", {
+      method: "POST",
+      body: JSON.stringify({ id, revision, outcome, context: { harness } }),
+    }), null, 2));
+    return;
+  }
   if (command === "recommend") {
     const task = process.argv.slice(3).join(" ").trim();
     if (!task) throw new Error("Usage: skillbox recommend <task>");
@@ -365,7 +375,7 @@ async function main() {
     return;
   }
   console.log(
-    "skillbox list | search <query> | recommend <task> | audit | manifest <id> | load <id> | resolve <bundle-id> | fetch <id>@<revision> | publish <directory> <id> <expectedRevision|new> | mcp | configure",
+    "skillbox list | search <query> | recommend <task> | report-use <id> <revision> <applied|succeeded|failed> | audit | manifest <id> | load <id> | resolve <bundle-id> | fetch <id>@<revision> | publish <directory> <id> <expectedRevision|new> | mcp | configure",
   );
 }
 main().catch((e) => {

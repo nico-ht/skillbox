@@ -22,6 +22,7 @@ import * as lib from "./library";
 import { handleMcp, fileSchema } from "./mcp";
 import type { Principal } from "../shared";
 import { recommendationInput } from "./recommendations";
+import { usageInput } from "./usage";
 import { compatibilityPage, manifestFor } from "./skill-resources";
 import {
   githubImportInput,
@@ -180,6 +181,9 @@ app.get("/api/skills", async (c) => {
     ),
   );
 });
+app.post("/api/skill-usage", async (c) =>
+  c.json(await lib.reportUse(c.get("principal"), usageInput.parse(await c.req.json()))),
+);
 app.post("/api/skill-recommendations", async (c) => {
   const input = recommendationInput.parse(await c.req.json());
   return c.json(
